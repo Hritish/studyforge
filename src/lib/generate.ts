@@ -4,14 +4,16 @@
  */
 import { chunkNotes, dedupeCards, DEFAULT_CHUNK_TOKENS, distributeCount, estimateTokens } from "./chunk";
 import type { ParseResult } from "./ai/schema";
-import { pdfFitsOneChunk } from "./ai/prompts";
 import { batchImages, batchLabel, toSlideImages, type SlideImage } from "./ai/images";
-import { IMAGES_NEED_KEY_MESSAGE, type CardDraft, type GenerationEvent, type NoteInput, type StudyContext } from "./types";
+import { splitPdf } from "./pdf";
+import { IMAGES_NEED_KEY_MESSAGE, SCANNED_PDF_NEEDS_KEY_MESSAGE, type CardDraft, type GenerationEvent, type NoteInput, type StudyContext } from "./types";
 
 export interface WorkItem {
   label: string;
   text: string;
   pdfBase64?: string;
+  /** Page range of the original PDF that `pdfBase64` covers. */
+  pdfPages?: { from: number; to: number; total: number };
   images?: SlideImage[];
 }
 
@@ -34,15 +36,17 @@ export interface ChunkGenerator {
 }
 
 /**
- * Build work items. Small PDFs go as native documents (when supported); all
- * other text is concatenated with per-file headers and chunked at section
- * boundaries. Nothing is truncated.
+ * Build work items. With a vision-capable generator every PDF goes as native
+ * page ranges, so slide screenshots and handwriting on the pages are read, not
+ * just the text layer. Other text is concatenated with per-file headers and
+ * chunked at section boundaries. Nothing is truncated.
  */
-export function buildWorkItems(
+export async function buildWorkItems(
   notes: NoteInput[],
   caps: { pdf: boolean; images: boolean },
   maxTokens = DEFAULT_CHUNK_TOKENS,
-): WorkItem[] {
+  warnings: string[] = [],
+): Promise<WorkItem[]> {
   const supportsPdf = caps.pdf;
   const items: WorkItem[] = [];
   const textParts: string[] = [];
@@ -50,9 +54,26 @@ export function buildWorkItems(
     if (n.kind === "image") continue; // handled below
 
     if (!n.text.trim() && !n.pdfBase64) continue;
-    // Native PDF input only when it fits one request (API limit ~32 MB request); else use extracted text chunks.
-    if (supportsPdf && n.pdfBase64 && n.pdfBase64.length < 20_000_000 && pdfFitsOneChunk(n.text, maxTokens)) {
-      items.push({ label: n.name, text: n.text, pdfBase64: n.pdfBase64 });
+    if (supportsPdf && n.pdfBase64) {
+      try {
+        const parts = await splitPdf(n.pdfBase64);
+        const total = parts.length ? parts[parts.length - 1].to : 0;
+        for (const p of parts) {
+          const label = parts.length > 1 ? `${n.name} (pages ${p.from}–${p.to} of ${total})` : n.name;
+          items.push({ label, text: "", pdfBase64: p.base64, pdfPages: { from: p.from, to: p.to, total } });
+        }
+        continue;
+      } catch (err) {
+        const why = err instanceof Error ? err.message : "it could not be split into pages";
+        if (!n.text.trim()) {
+          warnings.push(`Skipped ${n.name}: ${why}`);
+          continue;
+        }
+        warnings.push(`Couldn't send ${n.name} as pages (${why}); used its text only, so images on its pages were not read.`);
+      }
+    }
+    if (!n.text.trim()) {
+      warnings.push(`Skipped ${n.name}: ${SCANNED_PDF_NEEDS_KEY_MESSAGE}`);
       continue;
     }
     textParts.push(notes.length > 1 ? `# ${n.name}\n\n${n.text.trim()}` : n.text.trim());
@@ -83,18 +104,21 @@ export async function runGeneration(
   emit: (e: GenerationEvent) => void,
 ): Promise<CardDraft[]> {
   const maxTokens = opts.maxChunkTokens ?? DEFAULT_CHUNK_TOKENS;
-  const queue = buildWorkItems(opts.notes, { pdf: gen.supportsPdf, images: gen.supportsImages }, maxTokens);
+  const buildWarnings: string[] = [];
+  const queue = await buildWorkItems(opts.notes, { pdf: gen.supportsPdf, images: gen.supportsImages }, maxTokens, buildWarnings);
   const skippedImages = gen.supportsImages ? 0 : opts.notes.filter((n) => n.kind === "image").length;
   if (queue.length === 0) {
-    emit({ type: "error", message: skippedImages ? `${IMAGES_NEED_KEY_MESSAGE}.` : "No notes text found. Paste notes or upload a file first." });
+    const reason = buildWarnings[0] ?? (skippedImages ? `${IMAGES_NEED_KEY_MESSAGE}.` : "No notes text found. Paste notes or upload a file first.");
+    emit({ type: "error", message: reason });
     return [];
   }
-  // Images count as ~2 pages of text each when splitting the target count.
-  const targets = opts.target
-    ? distributeCount(queue.map((q) => q.text || "x".repeat(4000 * Math.max(1, q.images?.length ?? 1))), opts.target)
-    : [];
+  // Images and PDF pages count as ~1 page of text each when splitting the target count.
+  const weight = (q: WorkItem) =>
+    q.text || "x".repeat(4000 * Math.max(1, q.images?.length ?? (q.pdfPages ? q.pdfPages.to - q.pdfPages.from + 1 : 1)));
+  const targets = opts.target ? distributeCount(queue.map(weight), opts.target) : [];
   const work = queue.map((item, i) => ({ item, target: opts.target ? targets[i] : null, splits: 0 }));
   emit({ type: "start", mode: gen.mode, chunks: work.length, model: gen.model });
+  for (const message of buildWarnings) emit({ type: "warning", message });
   if (skippedImages) {
     emit({ type: "warning", message: `${IMAGES_NEED_KEY_MESSAGE}. Skipped ${skippedImages} image${skippedImages === 1 ? "" : "s"}; generated from your text notes only.` });
   }

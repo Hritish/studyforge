@@ -68,6 +68,7 @@ export interface NoteInput {
 }
 
 export const IMAGES_NEED_KEY_MESSAGE = "Reading screenshots requires an Anthropic API key — add ANTHROPIC_API_KEY to .env";
+export const SCANNED_PDF_NEEDS_KEY_MESSAGE = "it has no text layer (scanned pages or screenshots). Reading it requires an Anthropic API key — add ANTHROPIC_API_KEY to .env.";
 
 export type CardCount = "auto" | 10 | 25 | 50;
 

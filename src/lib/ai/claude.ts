@@ -36,7 +36,9 @@ export function hasApiKey(): boolean {
 }
 
 export function createClient(): Anthropic {
-  return new Anthropic();
+  // Keys not scoped to a workspace must name one on every request.
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+  return new Anthropic(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {});
 }
 
 /**

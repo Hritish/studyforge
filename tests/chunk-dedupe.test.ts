@@ -112,13 +112,13 @@ describe("runGeneration", () => {
     expect(events.map((e) => e.type)).toEqual(["start", "progress", "warning", "error"]);
   });
 
-  it("sends small PDFs natively and large PDFs as text chunks", () => {
-    const small = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], { pdf: true, images: true });
-    expect(small).toEqual([{ label: "a.pdf", text: "short", pdfBase64: "AAA" }]);
-    const big = buildWorkItems([{ name: "b.pdf", kind: "pdf", text: section(1, 3000), pdfBase64: "AAA" }], { pdf: true, images: true }, 2000);
+  it("falls back to text chunks for PDFs that can't be split, and uses only text in demo mode", async () => {
+    const warnings: string[] = [];
+    const big = await buildWorkItems([{ name: "b.pdf", kind: "pdf", text: section(1, 3000), pdfBase64: "AAA" }], { pdf: true, images: true }, 2000, warnings);
     expect(big.length).toBeGreaterThan(1);
     expect(big.every((i) => !i.pdfBase64)).toBe(true);
-    const demo = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], { pdf: false, images: false });
+    expect(warnings[0]).toMatch(/Couldn't send b\.pdf as pages/);
+    const demo = await buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], { pdf: false, images: false });
     expect(demo[0].pdfBase64).toBeUndefined();
   });
 });

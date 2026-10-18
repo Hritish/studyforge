@@ -105,8 +105,9 @@ export function CreateFlow({
 
   async function continueFromInput() {
     setError(null);
-    const hasImages = notes.some((n) => n.kind === "image");
-    if (notes.length === 0 || (totalChars < 20 && !hasImages)) {
+    // Images and PDFs (including scanned ones) are read visually by Claude, so they count without text.
+    const hasVisual = notes.some((n) => n.kind === "image" || (n.kind === "pdf" && Boolean(n.pdfBase64)));
+    if (notes.length === 0 || (totalChars < 20 && !hasVisual)) {
       setError("Add some notes first — paste text or upload a file.");
       return;
     }
@@ -123,6 +124,7 @@ export function CreateFlow({
           examName: examName || undefined,
           syllabus: syllabus ? { name: syllabus.name, kind: syllabus.kind, text: syllabus.text, pdfBase64: syllabus.pdfBase64 } : undefined,
           notesText: notes.map((n) => n.text).join("\n\n"),
+          notesPdf: notes.find((n) => n.kind === "pdf" && n.pdfBase64)?.pdfBase64,
           images: notes.filter((n) => n.kind === "image").slice(0, 6),
         }),
       });

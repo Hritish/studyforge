@@ -64,4 +64,4 @@ export function buildImageBlocks(images: SlideImage[]): Anthropic.Beta.BetaConte
   ]);
 }
 
-export const IMAGE_INSTRUCTIONS = `The notes above are images: lecture slides or screenshots. Read their text, formulas, tables and diagrams. Ignore UI chrome (browser bars, app toolbars, window controls), slide numbers, footers, logos and watermarks. Ground every card only in what is visible in the images. In each card's "source", name the image it came from followed by a short excerpt, e.g. "Slide image 3: V0 = D1 / (r − g)".`;
+export const IMAGE_INSTRUCTIONS = `The notes above are images: lecture slides or screenshots. Read their text, formulas, tables and diagrams. Ignore UI chrome (browser bars, app toolbars, window controls), slide numbers, footers, logos and watermarks. Use the images to decide which topics to cover, and any handwritten or typed notes on them to see what was emphasized. In each card's "source", name the image it came from followed by a short excerpt, e.g. "Slide image 3: V0 = D1 / (r − g)".`;

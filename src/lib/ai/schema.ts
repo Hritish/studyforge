@@ -13,7 +13,7 @@ export const CardSchema = z.object({
   type: z.enum(CARD_TYPES),
   topic: z.string().describe("One of the study context's topic areas."),
   difficulty: z.number().int().describe("1 = recall, 2 = understanding, 3 = application"),
-  source: z.string().describe("Short verbatim excerpt from the notes this card is based on."),
+  source: z.string().describe("Where in the notes this card's topic comes from: page/image label plus a short excerpt."),
 });
 
 export const CardsOutputSchema = z.object({

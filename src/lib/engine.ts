@@ -45,6 +45,7 @@ export function claudeGenerator(client: ClaudeLike = createClient() as unknown a
             context,
             notesText: item.text,
             pdfBase64: item.pdfBase64,
+            pdfPages: item.pdfPages,
             images: item.images,
             notesLabel: item.label,
             chunkIndex: index,

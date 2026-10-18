@@ -43,6 +43,8 @@ export const DetectContextZ = z.object({
   examName: z.string().max(200).optional(),
   syllabus: NoteZ.optional(),
   notesText: z.string().optional(),
+  /** Base64 of the first notes PDF; its first pages are read for context. */
+  notesPdf: z.string().optional(),
   /** Slide images from notes (a sample is used). */
   images: z.array(NoteZ).max(20).optional(),
 });

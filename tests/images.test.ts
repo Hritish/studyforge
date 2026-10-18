@@ -97,11 +97,11 @@ describe("image blocks and batching", () => {
 const card = (front: string, source = ""): CardDraft => ({ front, back: `${front} def`, type: "definition", topic: "Equity Valuation", difficulty: 1, source });
 
 describe("generation with images", () => {
-  it("creates image batches alongside text chunks when vision is supported", () => {
+  it("creates image batches alongside text chunks when vision is supported", async () => {
     const notes = [{ name: "n", kind: "paste" as const, text: "Alpha: first" }, ...Array.from({ length: 10 }, (_, i) => imgNote(i))];
-    const items = buildWorkItems(notes, { pdf: true, images: true });
+    const items = await buildWorkItems(notes, { pdf: true, images: true });
     expect(items.map((i) => i.label)).toEqual(["Notes", "Slide images 1–8", "Slide images 9–10"]);
-    expect(buildWorkItems(notes, { pdf: false, images: false }).map((i) => i.label)).toEqual(["Notes"]);
+    expect((await buildWorkItems(notes, { pdf: false, images: false })).map((i) => i.label)).toEqual(["Notes"]);
   });
 
   it("de-dupes cards across image batches using a mocked SDK", async () => {

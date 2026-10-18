@@ -3,32 +3,38 @@
  * they can be unit-tested without the network.
  */
 import type Anthropic from "@anthropic-ai/sdk";
-import { estimateTokens } from "../chunk";
 import type { CardCount, StudyContext } from "../types";
 import { buildImageBlocks, IMAGE_INSTRUCTIONS, type SlideImage } from "./images";
 
 type ContentBlock = Anthropic.Beta.BetaContentBlockParam;
 
 /** Stable system prompt (kept byte-identical across requests so it caches). */
-export const CARDS_SYSTEM_PROMPT = `You are StudyForge, an expert exam-prep tutor who writes high-quality flashcards from a student's own notes.
+export const CARDS_SYSTEM_PROMPT = `You are StudyForge, a friendly expert tutor who turns a student's rough notes into simple, easy-to-learn flashcards for their exam.
 
-Rules:
-1. Ground every card in the notes. Do not add facts, numbers, or claims that are not in the notes. The study context only shapes framing, terminology, emphasis, and topic tags; it is never a source of new facts.
-2. Use the study context's terminology and notation conventions (e.g. the exam's official names for concepts and symbols).
-3. Emphasize what is testable on that exam: definitions examiners use, formulas, decision rules, distinctions between commonly confused ideas, and calculation steps.
-4. Choose a card type for each card:
+How to use the notes:
+- The student's notes are often messy, incomplete, shorthand, or partly wrong. Treat them as a guide to WHAT the student is studying (which topics and concepts) and what their lecturer emphasized, not as the only source of facts.
+- Use your own accurate knowledge of the subject and of the exam in the study context to explain each concept correctly and clearly. Fill in missing steps, definitions, and symbol meanings.
+- If the notes are wrong or garbled, write the correct version. Never copy an error onto a card.
+- Stay on the topics the notes cover. You may add a closely related core concept the exam expects for that topic (for example, a definition the notes use but never explain), but do not drift into topics the notes don't touch.
+- Notes the student flagged (e.g. "exam", "memorize", "prof said", "!!", underlines) deserve cards.
+
+How to write the cards:
+1. Make them easy to learn. Use plain, everyday language and short sentences, the way a good tutor would explain it out loud. Avoid jargon unless it's the exam's own term, and if so explain it simply.
+2. One idea per card. Split anything complicated into several small cards rather than one dense card.
+3. Front: a short term or one clear question (ideally under 12 words).
+4. Back: the simplest correct answer, usually 1–2 short sentences (about 30 words at most). When a formula matters, give it in plain-text notation (e.g. V0 = D1 / (r − g)), then say in plain words what each symbol means. A short memory hook or intuition ("think of it as…") is welcome when it genuinely helps.
+5. Use the study context's official terminology and notation, so the cards match how the exam asks questions.
+6. Choose a card type for each card:
    - definition: a term and its meaning
-   - concept: why/how something works
+   - concept: why/how something works, explained simply
    - formula: the formula with each symbol explained
-   - calculation: a worked numeric question that the notes support, with the answer and key steps
-   - compare: compare/contrast two related ideas
-5. When the notes contain a formula relevant to a card, include it on the back in plain-text notation (e.g. V0 = D1 / (r − g)).
-6. Tag each card's "topic" with exactly one of the study context's topic areas. If none fit, use the closest one; if the context has no topic areas, use a short section name from the notes.
-7. difficulty: 1 = recall, 2 = understanding, 3 = application/multi-step.
-8. "source": copy a short verbatim excerpt (at most ~25 words) from the notes that supports the card.
-9. Keep fronts concise (a term or a single question). Keep backs focused: usually 1–3 sentences or a formula with symbol definitions.
+   - calculation: a small worked example with easy numbers, the answer, and the key steps
+   - compare: how two easily confused ideas differ
+7. Tag each card's "topic" with exactly one of the study context's topic areas. If none fit, use the closest one; if the context has no topic areas, use a short section name from the notes.
+8. difficulty: 1 = recall, 2 = understanding, 3 = application/multi-step. Most cards should be 1 or 2.
+9. "source": where in the notes this card's topic comes from, as a short excerpt of the notes (at most ~15 words), prefixed with the page or image label when there is one, e.g. "p. 4: forward rates = breakeven…". This shows the student which part of their notes the card covers; the card itself does not have to repeat the notes' wording.
 10. Do not duplicate cards listed under existing_cards, and do not produce two cards that test the same fact.
-11. When the notes are images (lecture slides or screenshots), read the visible text, formulas, tables and diagrams; ignore UI chrome, slide numbers and footers; use only what is visible; and start "source" with the image label, e.g. "Slide image 3: …".
+11. When the notes are images or PDF pages (lecture slides or screenshots, often with the student's handwritten or typed notes beneath), read the slide text, formulas, tables, diagrams and the student's notes. Ignore UI chrome, slide numbers and footers.
 12. Return only the JSON object described by the output schema.`;
 
 export const CONTEXT_SYSTEM_PROMPT = `You identify what a student is studying so flashcards can be tailored to it.
@@ -53,9 +59,9 @@ export function describeContext(ctx: StudyContext): string {
 
 export function countInstruction(target: number | null): string {
   if (target === null) {
-    return "Write as many cards as the notes genuinely support: roughly one per distinct testable fact, formula, or distinction (typically 8–40 for this amount of text). Do not pad.";
+    return "Write one simple card per important concept, formula, or distinction in the topics these notes cover (typically 8–40 for this amount of material). Do not pad with trivia.";
   }
-  return `Write about ${target} cards. If the notes cannot support that many without padding or inventing facts, write fewer.`;
+  return `Write about ${target} cards. Stay on the topics these notes cover; if they can't support that many useful cards without trivia, write fewer.`;
 }
 
 export interface CardsPromptInput {
@@ -64,6 +70,8 @@ export interface CardsPromptInput {
   notesText: string;
   /** If set, the notes are sent as a native PDF document block instead of text. */
   pdfBase64?: string;
+  /** Page range of the original PDF that `pdfBase64` covers. */
+  pdfPages?: { from: number; to: number; total: number };
   /** If set, the notes are these slide images (sent as base64 image blocks before the instruction). */
   images?: SlideImage[];
   notesLabel: string;
@@ -96,7 +104,7 @@ export function buildCardsUserContent(input: CardsPromptInput): ContentBlock[] {
   const notes = hasImages
     ? `The notes are the ${input.images!.length} slide image${input.images!.length === 1 ? "" : "s"} above (${input.images!.map((i) => i.label).join(", ")}).\n${IMAGE_INSTRUCTIONS}`
     : input.pdfBase64
-    ? `The notes are the attached PDF document "${escapeXml(input.notesLabel)}".`
+    ? pdfNotesInstruction(input.notesLabel, input.pdfPages)
     : `<notes source="${escapeXml(input.notesLabel)}">\n${input.notesText}\n</notes>`;
 
   blocks.push({
@@ -109,7 +117,7 @@ ${existing}
 
 ${notes}
 
-Create flashcards from these notes for a student preparing for ${input.context.name || "this subject"}.${part}
+Create simple, easy-to-learn flashcards on the topics in these notes for a student preparing for ${input.context.name || "this subject"}. Use the notes to decide what to cover; use your own knowledge to make each card correct and clear.${part}
 ${countInstruction(input.target)}`,
   });
   return blocks;
@@ -120,6 +128,8 @@ export interface ContextPromptInput {
   syllabusText?: string;
   syllabusPdfBase64?: string;
   notesText?: string;
+  /** First pages of a notes PDF (read as images, so scanned slides work). */
+  notesPdfBase64?: string;
   /** Slide images from the notes and/or syllabus (a sample is sent). */
   images?: SlideImage[];
 }
@@ -150,12 +160,24 @@ export function buildContextUserContent(input: ContextPromptInput): ContentBlock
       title: "Syllabus",
     });
   }
+  if (input.notesPdfBase64) {
+    blocks.push({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: input.notesPdfBase64 },
+      title: "Notes (first pages)",
+    });
+  }
   const parts: string[] = [];
   parts.push(`<exam_or_course_name>${input.examName?.trim() ? escapeXml(input.examName.trim()) : "(not provided)"}</exam_or_course_name>`);
   if (input.syllabusPdfBase64) parts.push("The syllabus is the attached PDF document.");
   else if (input.syllabusText?.trim()) parts.push(`<syllabus>\n${input.syllabusText.trim()}\n</syllabus>`);
   else parts.push("<syllabus>(not provided)</syllabus>");
   if (input.notesText?.trim()) parts.push(`<notes_sample>\n${notesSampleForContext(input.notesText.trim())}\n</notes_sample>`);
+  if (input.notesPdfBase64) {
+    parts.push(
+      `The attached "Notes (first pages)" document is the opening pages of the student's notes PDF, often lecture slide screenshots with handwritten or typed notes beneath. Read the slide titles, text, formulas and logos/branding when identifying the exam or course.`,
+    );
+  }
   if (images.length) {
     parts.push(
       `The ${images.length} image${images.length === 1 ? "" : "s"} above ${images.length === 1 ? "is a lecture slide or screenshot" : "are lecture slides or screenshots"} from the student's materials. Read their visible text, titles, formulas and logos/branding (ignore UI chrome) when identifying the exam or course.`,
@@ -166,9 +188,14 @@ export function buildContextUserContent(input: ContextPromptInput): ContentBlock
   return blocks;
 }
 
-/** Whether a PDF's extracted text is small enough to send as one native document block. */
-export function pdfFitsOneChunk(extractedText: string, maxTokens: number): boolean {
-  return estimateTokens(extractedText) <= maxTokens;
+/** Instruction for notes sent as a native PDF: pages are often slide screenshots with the student's notes beneath. */
+export function pdfNotesInstruction(label: string, pages?: { from: number; to: number; total: number }): string {
+  const range =
+    pages && (pages.from > 1 || pages.to < pages.total)
+      ? ` It contains pages ${pages.from}–${pages.to} of a ${pages.total}-page file: page 1 of the attachment is page ${pages.from} of the original. Use original page numbers.`
+      : "";
+  return `The notes are the attached PDF document "${escapeXml(label)}".${range}
+Its pages are often lecture slides or screenshots of slides, with the student's own handwritten or typed notes beneath or beside them. Read everything on each page: slide text, formulas, tables, diagrams and charts, and the student's notes. The student's notes show what the lecturer emphasized, so make sure those points get cards. Ignore UI chrome (browser bars, app toolbars), slide numbers, footers, logos and watermarks. In each card's "source", give the page followed by a short excerpt, e.g. "p. 4: forward rates = breakeven…".`;
 }
 
 export function targetFor(count: CardCount): number | null {
