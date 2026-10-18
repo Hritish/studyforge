@@ -1,14 +1,26 @@
 /**
  * Seeds a demo "CFA Level II" study set drawn from samples/cfa-level-2-notes.md.
- * Idempotent: removes any previous demo set first.  Run with `npm run db:seed`.
+ * Idempotent: removes any previous demo set first.
+ *   npm run db:seed          # local DB (DATABASE_URL, default file:./dev.db)
+ *   npm run db:seed:remote   # hosted DB (TURSO_DATABASE_URL / DATABASE_URL=libsql://… + auth token);
+ *                            # add `-- --env-file=.env.vercel` to read them from a file
  */
-import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
+import { loadScriptEnv } from "../scripts/env";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { knownToStudyContext, KNOWN_CONTEXTS } from "../src/lib/contexts";
+import { resolveDbConfig } from "../src/lib/db-config";
 
-const prisma = new PrismaClient({ adapter: new PrismaLibSql({ url: process.env.DATABASE_URL ?? "file:./dev.db" }) });
+loadScriptEnv();
+const remoteOnly = process.argv.includes("--remote");
+const db = resolveDbConfig(process.env, { preferRemote: remoteOnly });
+if (remoteOnly && !db.remote) {
+  console.error("db:seed:remote needs TURSO_DATABASE_URL (or DATABASE_URL=libsql://…) and an auth token. See docs/DEPLOY.md.");
+  process.exit(1);
+}
+if (db.remote) console.log(`Seeding ${new URL(db.url).host}`);
+const prisma = new PrismaClient({ adapter: new PrismaLibSql(db.authToken ? { url: db.url, authToken: db.authToken } : { url: db.url }) });
 
 const DEMO_TITLE = "CFA Level II — Valuation, Fixed Income, Derivatives & Ethics";
 

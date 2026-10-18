@@ -2,6 +2,9 @@
   "name": "flashcards",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "next dev -p 3100",
     "build": "prisma generate && next build",
@@ -11,14 +14,18 @@
     "test": "vitest run",
     "db:setup": "prisma migrate deploy && prisma generate && npm run db:seed",
     "db:seed": "tsx prisma/seed.ts",
+    "db:deploy": "tsx scripts/db-deploy.ts",
+    "db:seed:remote": "tsx prisma/seed.ts --remote",
     "db:reset": "prisma migrate reset --force && npm run db:seed",
     "smoke": "tsx scripts/smoke.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
+    "@libsql/client": "^0.17.4",
     "@prisma/adapter-libsql": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "@vercel/blob": "^2.8.0",
     "mammoth": "^1.13.0",
     "next": "16.4.2",
     "pdf-lib": "^1.17.1",

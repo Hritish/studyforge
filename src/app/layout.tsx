@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Header } from "@/components/Header";
+import { isLocalDatabase } from "@/lib/db-config";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -20,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main className="flex-1">{children}</main>
         <footer className="border-t border-slate-200/70 py-6 text-center text-xs text-slate-500">
-          StudyForge MVP · Your notes stay on this machine (SQLite).
+          StudyForge MVP{isLocalDatabase() ? " · Your notes stay on this machine (SQLite)." : ""}
         </footer>
       </body>
     </html>
