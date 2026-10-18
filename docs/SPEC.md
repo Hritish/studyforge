@@ -3,7 +3,7 @@
 StudyForge reads a student's notes and generates flashcards **in the context of what they are studying** (e.g. CFA Level II), then offers Quizlet-style study modes. Single user, no auth, local SQLite.
 
 ## Stack
-Next.js 16 (App Router, Turbopack) · TypeScript · Tailwind v4 · Prisma 7 (SQLite via `@prisma/adapter-libsql`) · `@anthropic-ai/sdk` · zod · mammoth (DOCX) · unpdf (PDF text) · vitest.
+Next.js 16 (App Router, Turbopack) · TypeScript · Tailwind v4 · Prisma 7 (SQLite via `@prisma/adapter-libsql`) · `@anthropic-ai/sdk` · zod · mammoth (DOCX) · unpdf (PDF text) · sharp (image downscaling) · vitest.
 
 ## Modes
 - **Claude mode** — when `ANTHROPIC_API_KEY` is set. Model from `ANTHROPIC_MODEL` (default `claude-opus-5-5`).
@@ -11,9 +11,9 @@ Next.js 16 (App Router, Turbopack) · TypeScript · Tailwind v4 · Prisma 7 (SQL
 
 ## Study context
 `StudyContext = { name, domain, level, topicAreas[], conventions, source, confidence }`.
-Inputs: exam/course name, syllabus file (PDF/DOCX/TXT/MD), and/or notes.
-- Claude: `beta.messages.create`, `thinking: adaptive`, `output_config.effort: "low"`, structured output (JSON schema from zod), server-side fallbacks (`server-side-fallback-2026-07-01`, `fallbacks: "default"`). Syllabus PDFs go as native `document` blocks.
-- Demo: name → built-in catalogue (`src/lib/contexts.ts`); otherwise keyword scoring of notes; syllabus headings → topic areas.
+Inputs: exam/course name, syllabus file (PDF/DOCX/TXT/MD/image), and/or notes (text and/or slide images).
+- Claude: `beta.messages.create`, `thinking: adaptive`, `output_config.effort: "low"`, structured output (JSON schema from zod), server-side fallbacks (`server-side-fallback-2026-07-01`, `fallbacks: "default"`). Syllabus PDFs go as native `document` blocks; up to 6 slide images (syllabus image first) go as `image` blocks before the text, so e.g. a CFA slide deck is recognized.
+- Demo: images are ignored (with the API-key notice); name → built-in catalogue (`src/lib/contexts.ts`); otherwise keyword scoring of notes; syllabus headings → topic areas.
 - When inferred (no name given), the UI asks "Looks like you're studying X — correct?" and lets the user edit every field. Context is saved on the set (`contextJson`) and injected into every generation prompt.
 
 ## Generation
@@ -25,6 +25,14 @@ Inputs: exam/course name, syllabus file (PDF/DOCX/TXT/MD), and/or notes.
 - API `/api/generate` streams NDJSON events (`start`, `progress`, `cards`, `warning`, `done`, `error`) for the progress UI.
 - Review screen: edit / delete / add cards before saving. Existing sets can "Add notes" and generate more (de-duped against existing cards).
 - Errors: SDK typed errors mapped most-specific-first (auth → permission → rate limit → API status → connection) to friendly messages.
+
+## Images (slide screenshots)
+- Upload `.png/.jpg/.jpeg/.webp/.gif` in notes and syllabus inputs (multiple, drag-and-drop) or Ctrl+V a screenshot into the notes box. Thumbnails + full preview are shown.
+- Server: sharp downscales so the longest side ≤ 1568px, re-encodes as JPEG (flattened, first GIF frame) and steps quality/size down until ≤ 3.75 MB (≈ 5 MB base64, the per-image API limit).
+- Claude: images become `{type: "image", source: {type: "base64", media_type, data}}` blocks, each preceded by a label text block ("Slide image N (file: …)"), all **before** the instruction text. Images are numbered globally and batched (≤ 8 images and ≤ 16 MB base64 per request); a batch that hits `max_tokens` is halved and retried. Cards are de-duped across batches and text chunks.
+- Prompt: images are lecture slides/screenshots; read text, formulas, tables and diagrams; ignore UI chrome, slide numbers and footers; ground only in what's visible; `source` starts with the image label ("Slide image 3: …").
+- Demo mode: images are accepted but skipped with "Reading screenshots requires an Anthropic API key — add ANTHROPIC_API_KEY to .env"; text notes still generate. Images only → that message as the error.
+- Image binaries are not stored in the DB (only a NoteSource row with kind `image`).
 
 ## Study modes
 - **Flashcards**: 3D flip, Space = flip, ←/→ = move, shuffle, Know it (K / ↑) / Still learning (L / ↓), filter by topic or still-learning.

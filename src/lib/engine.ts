@@ -3,7 +3,7 @@ import { createClient, detectContextWithClaude, friendlyError, generateCardsWith
 import type { ContextPromptInput } from "./ai/prompts";
 import { detectDemoContext, generateDemoCards } from "./demo/generator";
 import type { ChunkGenerator } from "./generate";
-import type { StudyContext } from "./types";
+import { IMAGES_NEED_KEY_MESSAGE, type StudyContext } from "./types";
 
 export type EngineMode = "demo" | "claude";
 
@@ -15,6 +15,7 @@ export function demoGenerator(): ChunkGenerator {
   return {
     mode: "demo",
     supportsPdf: false,
+    supportsImages: false,
     async generate({ item, target, context }) {
       const cards = generateDemoCards(item.text, context, { target: target ?? undefined });
       if (cards.length === 0) {
@@ -35,6 +36,7 @@ export function claudeGenerator(client: ClaudeLike = createClient() as unknown a
     mode: "claude",
     model: getModel(),
     supportsPdf: true,
+    supportsImages: true,
     async generate({ item, index, count, target, context, existingFronts, onDelta }) {
       try {
         return await generateCardsWithClaude(
@@ -43,6 +45,7 @@ export function claudeGenerator(client: ClaudeLike = createClient() as unknown a
             context,
             notesText: item.text,
             pdfBase64: item.pdfBase64,
+            images: item.images,
             notesLabel: item.label,
             chunkIndex: index,
             chunkCount: count,
@@ -66,7 +69,8 @@ export async function detectContext(
   input: ContextPromptInput,
 ): Promise<{ context: StudyContext; mode: EngineMode; warning?: string }> {
   if (engineMode() === "demo") {
-    return { context: detectDemoContext(input), mode: "demo" };
+    const warning = input.images?.length ? `${IMAGES_NEED_KEY_MESSAGE}. Images were not used to detect the context.` : undefined;
+    return { context: detectDemoContext(input), mode: "demo", warning };
   }
   try {
     const client = createClient() as unknown as ClaudeLike;

@@ -5,6 +5,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { estimateTokens } from "../chunk";
 import type { CardCount, StudyContext } from "../types";
+import { buildImageBlocks, IMAGE_INSTRUCTIONS, type SlideImage } from "./images";
 
 type ContentBlock = Anthropic.Beta.BetaContentBlockParam;
 
@@ -27,7 +28,8 @@ Rules:
 8. "source": copy a short verbatim excerpt (at most ~25 words) from the notes that supports the card.
 9. Keep fronts concise (a term or a single question). Keep backs focused: usually 1–3 sentences or a formula with symbol definitions.
 10. Do not duplicate cards listed under existing_cards, and do not produce two cards that test the same fact.
-11. Return only the JSON object described by the output schema.`;
+11. When the notes are images (lecture slides or screenshots), read the visible text, formulas, tables and diagrams; ignore UI chrome, slide numbers and footers; use only what is visible; and start "source" with the image label, e.g. "Slide image 3: …".
+12. Return only the JSON object described by the output schema.`;
 
 export const CONTEXT_SYSTEM_PROMPT = `You identify what a student is studying so flashcards can be tailored to it.
 Given any of: an exam or course name, a syllabus/curriculum outline, and a sample of the student's notes, return the study context:
@@ -62,6 +64,8 @@ export interface CardsPromptInput {
   notesText: string;
   /** If set, the notes are sent as a native PDF document block instead of text. */
   pdfBase64?: string;
+  /** If set, the notes are these slide images (sent as base64 image blocks before the instruction). */
+  images?: SlideImage[];
   notesLabel: string;
   chunkIndex: number;
   chunkCount: number;
@@ -76,6 +80,8 @@ function escapeXml(s: string): string {
 /** Build the user-message content blocks for one generation request. */
 export function buildCardsUserContent(input: CardsPromptInput): ContentBlock[] {
   const blocks: ContentBlock[] = [];
+  const hasImages = Boolean(input.images?.length);
+  if (hasImages) blocks.push(...buildImageBlocks(input.images!));
   if (input.pdfBase64) {
     blocks.push({
       type: "document",
@@ -87,7 +93,9 @@ export function buildCardsUserContent(input: CardsPromptInput): ContentBlock[] {
     ? input.existingFronts.slice(0, 400).map((f) => `- ${escapeXml(f)}`).join("\n")
     : "(none)";
   const part = input.chunkCount > 1 ? ` This is part ${input.chunkIndex + 1} of ${input.chunkCount} of the notes; only cover this part.` : "";
-  const notes = input.pdfBase64
+  const notes = hasImages
+    ? `The notes are the ${input.images!.length} slide image${input.images!.length === 1 ? "" : "s"} above (${input.images!.map((i) => i.label).join(", ")}).\n${IMAGE_INSTRUCTIONS}`
+    : input.pdfBase64
     ? `The notes are the attached PDF document "${escapeXml(input.notesLabel)}".`
     : `<notes source="${escapeXml(input.notesLabel)}">\n${input.notesText}\n</notes>`;
 
@@ -112,7 +120,12 @@ export interface ContextPromptInput {
   syllabusText?: string;
   syllabusPdfBase64?: string;
   notesText?: string;
+  /** Slide images from the notes and/or syllabus (a sample is sent). */
+  images?: SlideImage[];
 }
+
+/** At most this many images are sent for context detection. */
+export const CONTEXT_MAX_IMAGES = 6;
 
 /** Sample of notes for context detection: the opening plus every heading, so the whole document is represented. */
 export function notesSampleForContext(notes: string, maxChars = 24_000): string {
@@ -128,6 +141,8 @@ export function notesSampleForContext(notes: string, maxChars = 24_000): string 
 
 export function buildContextUserContent(input: ContextPromptInput): ContentBlock[] {
   const blocks: ContentBlock[] = [];
+  const images = (input.images ?? []).slice(0, CONTEXT_MAX_IMAGES);
+  if (images.length) blocks.push(...buildImageBlocks(images));
   if (input.syllabusPdfBase64) {
     blocks.push({
       type: "document",
@@ -141,6 +156,11 @@ export function buildContextUserContent(input: ContextPromptInput): ContentBlock
   else if (input.syllabusText?.trim()) parts.push(`<syllabus>\n${input.syllabusText.trim()}\n</syllabus>`);
   else parts.push("<syllabus>(not provided)</syllabus>");
   if (input.notesText?.trim()) parts.push(`<notes_sample>\n${notesSampleForContext(input.notesText.trim())}\n</notes_sample>`);
+  if (images.length) {
+    parts.push(
+      `The ${images.length} image${images.length === 1 ? "" : "s"} above ${images.length === 1 ? "is a lecture slide or screenshot" : "are lecture slides or screenshots"} from the student's materials. Read their visible text, titles, formulas and logos/branding (ignore UI chrome) when identifying the exam or course.`,
+    );
+  }
   parts.push("Determine the study context.");
   blocks.push({ type: "text", text: parts.join("\n\n") });
   return blocks;

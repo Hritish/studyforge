@@ -64,7 +64,7 @@ export default async function Home() {
         <div className="grid gap-4 sm:grid-cols-3">
           {[
             ["1", "Tell us what you're studying", "Type an exam or course, upload a syllabus — or skip it and we'll infer it from your notes."],
-            ["2", "Drop in your notes", "Paste text or upload .txt, .md, .pdf and .docx files. Long notes are chunked, never truncated."],
+            ["2", "Drop in your notes", "Paste text, upload .txt, .md, .pdf, .docx — or slide screenshots. Long notes are chunked, never truncated."],
             ["3", "Review, then study", "Edit the cards, then drill with Flashcards, Match and Learn. Progress is tracked per topic."],
           ].map(([n, t, d]) => (
             <div key={n} className="rounded-2xl bg-white/70 p-5 ring-1 ring-slate-200/80">

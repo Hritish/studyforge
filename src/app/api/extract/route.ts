@@ -14,14 +14,14 @@ export async function POST(req: Request) {
   }
   const files = form.getAll("files").filter((f): f is File => typeof f !== "string");
   if (files.length === 0) return badRequest("No files uploaded.");
-  if (files.length > 20) return badRequest("Upload at most 20 files at once.");
+  if (files.length > 60) return badRequest("Upload at most 60 files at once.");
 
   const results = [];
   const errors: string[] = [];
   for (const f of files) {
     try {
       const out = await extractFile(f.name, Buffer.from(await f.arrayBuffer()));
-      if (!out.text.trim()) errors.push(`${f.name}: no text could be extracted (scanned PDFs need OCR).`);
+      if (out.kind !== "image" && !out.text.trim()) errors.push(`${f.name}: no text could be extracted (scanned PDFs need OCR).`);
       results.push({ ...out, chars: out.text.length });
     } catch (e) {
       errors.push(e instanceof Error ? `${f.name}: ${e.message}` : `${f.name}: failed to read file.`);

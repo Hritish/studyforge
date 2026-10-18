@@ -13,10 +13,15 @@ export const ContextZ = z.object({
 
 export const NoteZ = z.object({
   name: z.string().max(300),
-  kind: z.enum(["paste", "txt", "md", "pdf", "docx"]),
+  kind: z.enum(["paste", "txt", "md", "pdf", "docx", "image"]),
   text: z.string(),
   pdfBase64: z.string().optional(),
+  imageBase64: z.string().optional(),
+  mediaType: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]).optional(),
 });
+
+/** Notes as stored in the DB (no binary payloads). */
+const SavedNoteZ = NoteZ.omit({ pdfBase64: true, imageBase64: true, mediaType: true });
 
 export const CardDraftZ = z.object({
   front: z.string().trim().min(1).max(1000),
@@ -29,7 +34,7 @@ export const CardDraftZ = z.object({
 
 export const GenerateZ = z.object({
   context: ContextZ,
-  notes: z.array(NoteZ).min(1).max(30),
+  notes: z.array(NoteZ).min(1).max(100),
   count: z.union([z.literal("auto"), z.literal(10), z.literal(25), z.literal(50)]).default("auto"),
   setId: z.string().optional(),
 });
@@ -38,6 +43,8 @@ export const DetectContextZ = z.object({
   examName: z.string().max(200).optional(),
   syllabus: NoteZ.optional(),
   notesText: z.string().optional(),
+  /** Slide images from notes (a sample is used). */
+  images: z.array(NoteZ).max(20).optional(),
 });
 
 export const CreateSetZ = z.object({
@@ -45,12 +52,12 @@ export const CreateSetZ = z.object({
   context: ContextZ,
   contextConfirmed: z.boolean().default(true),
   cards: z.array(CardDraftZ).max(1000),
-  notes: z.array(NoteZ.omit({ pdfBase64: true })).max(30).default([]),
+  notes: z.array(SavedNoteZ).max(100).default([]),
 });
 
 export const AddCardsZ = z.object({
   cards: z.array(CardDraftZ).max(1000),
-  notes: z.array(NoteZ.omit({ pdfBase64: true })).max(30).default([]),
+  notes: z.array(SavedNoteZ).max(100).default([]),
 });
 
 export const PatchSetZ = z.object({

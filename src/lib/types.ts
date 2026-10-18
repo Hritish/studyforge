@@ -52,14 +52,22 @@ export interface CardDraft {
   source: string;
 }
 
-/** A piece of notes text (pasted or extracted from a file). */
+export type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+/** A piece of notes (pasted text, an extracted file, or an image such as a slide screenshot). */
 export interface NoteInput {
   name: string;
-  kind: "paste" | "txt" | "md" | "pdf" | "docx";
+  kind: "paste" | "txt" | "md" | "pdf" | "docx" | "image";
+  /** Extracted text ("" for images). */
   text: string;
   /** Base64 of the original PDF, so the Claude path can use native PDF input. */
   pdfBase64?: string;
+  /** Base64 of the downscaled, re-encoded image (kind === "image"). */
+  imageBase64?: string;
+  mediaType?: ImageMediaType;
 }
+
+export const IMAGES_NEED_KEY_MESSAGE = "Reading screenshots requires an Anthropic API key — add ANTHROPIC_API_KEY to .env";
 
 export type CardCount = "auto" | 10 | 25 | 50;
 

@@ -68,6 +68,7 @@ describe("runGeneration", () => {
     const gen: ChunkGenerator = {
       mode: "demo",
       supportsPdf: false,
+      supportsImages: false,
       generate: async ({ index }) => ({ ok: true, data: index === 0 ? [card("Alpha"), card("Beta")] : [card("Beta"), card("Gamma"), card("Delta")] }),
     };
     const events: GenerationEvent[] = [];
@@ -88,6 +89,7 @@ describe("runGeneration", () => {
     const gen: ChunkGenerator = {
       mode: "claude",
       supportsPdf: true,
+      supportsImages: true,
       generate: async ({ item }) => {
         calls++;
         if (calls === 1) return { ok: false, reason: "max_tokens", message: "limit" };
@@ -103,7 +105,7 @@ describe("runGeneration", () => {
   });
 
   it("reports refusals as warnings and errors when nothing was generated", async () => {
-    const gen: ChunkGenerator = { mode: "claude", supportsPdf: true, generate: async () => ({ ok: false, reason: "refusal", message: "declined" }) };
+    const gen: ChunkGenerator = { mode: "claude", supportsPdf: true, supportsImages: true, generate: async () => ({ ok: false, reason: "refusal", message: "declined" }) };
     const events: GenerationEvent[] = [];
     const out = await runGeneration({ notes: [{ name: "n", kind: "paste", text: "a: b" }], context: EMPTY_CONTEXT, target: 10, existing: [] }, gen, (e) => events.push(e));
     expect(out).toEqual([]);
@@ -111,12 +113,12 @@ describe("runGeneration", () => {
   });
 
   it("sends small PDFs natively and large PDFs as text chunks", () => {
-    const small = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], true);
+    const small = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], { pdf: true, images: true });
     expect(small).toEqual([{ label: "a.pdf", text: "short", pdfBase64: "AAA" }]);
-    const big = buildWorkItems([{ name: "b.pdf", kind: "pdf", text: section(1, 3000), pdfBase64: "AAA" }], true, 2000);
+    const big = buildWorkItems([{ name: "b.pdf", kind: "pdf", text: section(1, 3000), pdfBase64: "AAA" }], { pdf: true, images: true }, 2000);
     expect(big.length).toBeGreaterThan(1);
     expect(big.every((i) => !i.pdfBase64)).toBe(true);
-    const demo = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], false);
+    const demo = buildWorkItems([{ name: "a.pdf", kind: "pdf", text: "short", pdfBase64: "AAA" }], { pdf: false, images: false });
     expect(demo[0].pdfBase64).toBeUndefined();
   });
 });

@@ -5,12 +5,14 @@
 import { chunkNotes, dedupeCards, DEFAULT_CHUNK_TOKENS, distributeCount, estimateTokens } from "./chunk";
 import type { ParseResult } from "./ai/schema";
 import { pdfFitsOneChunk } from "./ai/prompts";
-import type { CardDraft, GenerationEvent, NoteInput, StudyContext } from "./types";
+import { batchImages, batchLabel, toSlideImages, type SlideImage } from "./ai/images";
+import { IMAGES_NEED_KEY_MESSAGE, type CardDraft, type GenerationEvent, type NoteInput, type StudyContext } from "./types";
 
 export interface WorkItem {
   label: string;
   text: string;
   pdfBase64?: string;
+  images?: SlideImage[];
 }
 
 export interface ChunkGenerator {
@@ -18,6 +20,8 @@ export interface ChunkGenerator {
   model?: string;
   /** Whether the generator accepts native PDF input. */
   supportsPdf: boolean;
+  /** Whether the generator can read images (vision). */
+  supportsImages: boolean;
   generate(req: {
     item: WorkItem;
     index: number;
@@ -34,10 +38,17 @@ export interface ChunkGenerator {
  * other text is concatenated with per-file headers and chunked at section
  * boundaries. Nothing is truncated.
  */
-export function buildWorkItems(notes: NoteInput[], supportsPdf: boolean, maxTokens = DEFAULT_CHUNK_TOKENS): WorkItem[] {
+export function buildWorkItems(
+  notes: NoteInput[],
+  caps: { pdf: boolean; images: boolean },
+  maxTokens = DEFAULT_CHUNK_TOKENS,
+): WorkItem[] {
+  const supportsPdf = caps.pdf;
   const items: WorkItem[] = [];
   const textParts: string[] = [];
   for (const n of notes) {
+    if (n.kind === "image") continue; // handled below
+
     if (!n.text.trim() && !n.pdfBase64) continue;
     // Native PDF input only when it fits one request (API limit ~32 MB request); else use extracted text chunks.
     if (supportsPdf && n.pdfBase64 && n.pdfBase64.length < 20_000_000 && pdfFitsOneChunk(n.text, maxTokens)) {
@@ -51,6 +62,10 @@ export function buildWorkItems(notes: NoteInput[], supportsPdf: boolean, maxToke
   chunks.forEach((c, i) =>
     items.push({ label: chunks.length > 1 ? `Notes (part ${i + 1} of ${chunks.length})` : "Notes", text: c }),
   );
+  // Slide images: batched into several moderately sized requests.
+  if (caps.images) {
+    for (const batch of batchImages(toSlideImages(notes))) items.push({ label: batchLabel(batch), text: "", images: batch });
+  }
   return items;
 }
 
@@ -68,14 +83,21 @@ export async function runGeneration(
   emit: (e: GenerationEvent) => void,
 ): Promise<CardDraft[]> {
   const maxTokens = opts.maxChunkTokens ?? DEFAULT_CHUNK_TOKENS;
-  const queue = buildWorkItems(opts.notes, gen.supportsPdf, maxTokens);
+  const queue = buildWorkItems(opts.notes, { pdf: gen.supportsPdf, images: gen.supportsImages }, maxTokens);
+  const skippedImages = gen.supportsImages ? 0 : opts.notes.filter((n) => n.kind === "image").length;
   if (queue.length === 0) {
-    emit({ type: "error", message: "No notes text found. Paste notes or upload a file first." });
+    emit({ type: "error", message: skippedImages ? `${IMAGES_NEED_KEY_MESSAGE}.` : "No notes text found. Paste notes or upload a file first." });
     return [];
   }
-  const targets = opts.target ? distributeCount(queue.map((q) => q.text || "x".repeat(4000)), opts.target) : [];
+  // Images count as ~2 pages of text each when splitting the target count.
+  const targets = opts.target
+    ? distributeCount(queue.map((q) => q.text || "x".repeat(4000 * Math.max(1, q.images?.length ?? 1))), opts.target)
+    : [];
   const work = queue.map((item, i) => ({ item, target: opts.target ? targets[i] : null, splits: 0 }));
   emit({ type: "start", mode: gen.mode, chunks: work.length, model: gen.model });
+  if (skippedImages) {
+    emit({ type: "warning", message: `${IMAGES_NEED_KEY_MESSAGE}. Skipped ${skippedImages} image${skippedImages === 1 ? "" : "s"}; generated from your text notes only.` });
+  }
 
   const all: CardDraft[] = [];
   let removed = 0;
@@ -97,7 +119,20 @@ export async function runGeneration(
     });
 
     if (!res.ok) {
-      if (res.reason === "max_tokens" && !w.item.pdfBase64 && w.splits < 2 && estimateTokens(w.item.text) > 1000) {
+      if (res.reason === "max_tokens" && w.item.images && w.item.images.length > 1 && w.splits < 2) {
+        // Too much output for this image batch: halve it.
+        const mid = Math.ceil(w.item.images.length / 2);
+        const halves = [w.item.images.slice(0, mid), w.item.images.slice(mid)];
+        work.splice(
+          i + 1,
+          0,
+          ...halves.map((h) => ({ item: { label: batchLabel(h), text: "", images: h }, target: w.target ? Math.ceil(w.target / 2) : null, splits: w.splits + 1 })),
+        );
+        total = work.length;
+        emit({ type: "warning", message: `${w.item.label} produced too much output; splitting it into smaller batches.` });
+        continue;
+      }
+      if (res.reason === "max_tokens" && !w.item.pdfBase64 && !w.item.images && w.splits < 2 && estimateTokens(w.item.text) > 1000) {
         // Too much output for one request: split this chunk in half and retry both halves.
         const halves = chunkNotes(w.item.text, Math.ceil(estimateTokens(w.item.text) / 2));
         const t = w.target ? distributeCount(halves, w.target) : [];

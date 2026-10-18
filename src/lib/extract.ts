@@ -1,4 +1,5 @@
 import "server-only";
+import { prepareImage } from "./images";
 import type { NoteInput } from "./types";
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -9,14 +10,25 @@ export function kindFromName(name: string): NoteInput["kind"] | null {
   if (ext === "md" || ext === "markdown") return "md";
   if (ext === "pdf") return "pdf";
   if (ext === "docx") return "docx";
+  if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) return "image";
   return null;
 }
 
 /** Extract plain text from an uploaded file. PDFs also return base64 for native Claude input. */
-export async function extractFile(name: string, buf: Buffer): Promise<NoteInput & { pages?: number }> {
+export async function extractFile(name: string, buf: Buffer): Promise<NoteInput & { pages?: number; width?: number; height?: number }> {
   const kind = kindFromName(name);
-  if (!kind) throw new Error(`Unsupported file type: ${name}. Use .txt, .md, .pdf or .docx.`);
+  if (!kind) throw new Error(`Unsupported file type: ${name}. Use .txt, .md, .pdf, .docx or an image (.png, .jpg, .webp, .gif).`);
   if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`${name} is larger than 25 MB.`);
+
+  if (kind === "image") {
+    let img;
+    try {
+      img = await prepareImage(buf);
+    } catch {
+      throw new Error("could not read this image.");
+    }
+    return { name, kind, text: "", imageBase64: img.base64, mediaType: img.mediaType, width: img.width, height: img.height };
+  }
 
   if (kind === "txt" || kind === "md") {
     return { name, kind, text: buf.toString("utf8").replace(/\r\n/g, "\n") };

@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import type { CardCount, CardDraft, GenerationEvent, NoteInput, StudyContext } from "@/lib/types";
-import { EMPTY_CONTEXT } from "@/lib/types";
+import { EMPTY_CONTEXT, IMAGES_NEED_KEY_MESSAGE } from "@/lib/types";
 import { btn, Card, input, ProgressBar, Spinner } from "../ui";
 import { ContextEditor } from "./ContextEditor";
 import { ReviewList, type DraftWithId } from "./ReviewList";
 
 type Step = "input" | "context" | "generating" | "review";
-type UploadedNote = NoteInput & { chars: number; pages?: number };
+type UploadedNote = NoteInput & { chars: number; pages?: number; width?: number; height?: number };
+
+const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp,.gif";
+const imgSrc = (n: { imageBase64?: string; mediaType?: string }) => `data:${n.mediaType ?? "image/jpeg"};base64,${n.imageBase64}`;
 
 const NOTES_PLACEHOLDER = `Paste your notes here. For example (CFA Level II):
 
@@ -58,11 +61,12 @@ export function CreateFlow({
 
   const notes: NoteInput[] = [
     ...(pasteText.trim() ? [{ name: "Pasted notes", kind: "paste" as const, text: pasteText }] : []),
-    ...files.map(({ name, kind, text, pdfBase64 }) => ({ name, kind, text, pdfBase64 })),
+    ...files.map(({ name, kind, text, pdfBase64, imageBase64, mediaType }) => ({ name, kind, text, pdfBase64, imageBase64, mediaType })),
   ];
   const totalChars = notes.reduce((a, n) => a + n.text.length, 0);
+  const imageCount = notes.filter((n) => n.kind === "image").length + (syllabus?.kind === "image" ? 1 : 0);
 
-  async function upload(list: FileList | null): Promise<UploadedNote[]> {
+  async function upload(list: FileList | File[] | null): Promise<UploadedNote[]> {
     if (!list || list.length === 0) return [];
     const fd = new FormData();
     for (const f of Array.from(list)) fd.append("files", f);
@@ -88,9 +92,21 @@ export function CreateFlow({
     if (res.ok) setPasteText(data.text);
   }
 
+  /** Ctrl+V a screenshot into the notes box. */
+  async function onPasteNotes(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const images = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (images.length === 0) return;
+    e.preventDefault();
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+    const named = images.map((f, i) => new File([f], `pasted-screenshot-${stamp}${images.length > 1 ? `-${i + 1}` : ""}.${f.type.split("/")[1] || "png"}`, { type: f.type }));
+    const up = await upload(named);
+    setFiles((f) => [...f, ...up]);
+  }
+
   async function continueFromInput() {
     setError(null);
-    if (notes.length === 0 || totalChars < 20) {
+    const hasImages = notes.some((n) => n.kind === "image");
+    if (notes.length === 0 || (totalChars < 20 && !hasImages)) {
       setError("Add some notes first — paste text or upload a file.");
       return;
     }
@@ -107,6 +123,7 @@ export function CreateFlow({
           examName: examName || undefined,
           syllabus: syllabus ? { name: syllabus.name, kind: syllabus.kind, text: syllabus.text, pdfBase64: syllabus.pdfBase64 } : undefined,
           notesText: notes.map((n) => n.text).join("\n\n"),
+          images: notes.filter((n) => n.kind === "image").slice(0, 6),
         }),
       });
       const data = await res.json();
@@ -261,21 +278,30 @@ export function CreateFlow({
                   <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Syllabus / curriculum outline</span>
                   {syllabus ? (
                     <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5 text-sm ring-1 ring-slate-200">
-                      <span className="truncate">📄 {syllabus.name} · {syllabus.chars.toLocaleString()} chars</span>
+                      <span className="flex min-w-0 items-center gap-2 truncate">
+                        {syllabus.kind === "image" ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={imgSrc(syllabus)} alt="" className="h-8 w-12 rounded object-cover ring-1 ring-slate-200" />
+                        ) : (
+                          "📄"
+                        )}
+                        {syllabus.name}
+                        {syllabus.kind === "image" ? "" : ` · ${syllabus.chars.toLocaleString()} chars`}
+                      </span>
                       <button className={btn.ghost} onClick={() => setSyllabus(null)}>
                         Remove
                       </button>
                     </div>
                   ) : (
                     <button className={`${btn.secondary} w-full`} onClick={() => syllabusRef.current?.click()}>
-                      Upload syllabus (PDF, DOCX, TXT, MD)
+                      Upload syllabus (PDF, DOCX, TXT, MD, image)
                     </button>
                   )}
                   <input
                     ref={syllabusRef}
                     type="file"
                     className="hidden"
-                    accept=".pdf,.docx,.txt,.md,.markdown"
+                    accept={ACCEPT}
                     onChange={async (e) => {
                       const [f] = await upload(e.target.files);
                       if (f) setSyllabus(f);
@@ -302,7 +328,9 @@ export function CreateFlow({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Your notes</h2>
-                <p className="text-sm text-slate-500">Paste text and/or upload files (.txt, .md, .pdf, .docx). Multiple files are fine.</p>
+                <p className="text-sm text-slate-500">
+                  Paste text and/or upload files (.txt, .md, .pdf, .docx) or slide screenshots (.png, .jpg, .webp, .gif). Tip: paste a screenshot with Ctrl+V.
+                </p>
               </div>
               <button className={btn.ghost} onClick={loadSample} data-testid="use-sample">
                 Use sample CFA notes
@@ -312,6 +340,7 @@ export function CreateFlow({
               className={`${input} min-h-56 font-mono text-[13px] leading-relaxed`}
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
+              onPaste={onPasteNotes}
               placeholder={NOTES_PLACEHOLDER}
               data-testid="notes-text"
             />
@@ -335,7 +364,7 @@ export function CreateFlow({
                 type="file"
                 multiple
                 className="hidden"
-                accept=".pdf,.docx,.txt,.md,.markdown"
+                accept={ACCEPT}
                 onChange={async (e) => {
                   const up = await upload(e.target.files);
                   setFiles((f) => [...f, ...up]);
@@ -348,10 +377,16 @@ export function CreateFlow({
                 {files.map((f, i) => (
                   <li key={`${f.name}-${i}`} className="rounded-xl bg-slate-50 ring-1 ring-slate-200">
                     <div className="flex items-center gap-2 px-3 py-2 text-sm">
-                      <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[11px] uppercase text-slate-500 ring-1 ring-slate-200">{f.kind}</span>
+                      {f.kind === "image" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={imgSrc(f)} alt={`Thumbnail of ${f.name}`} className="h-10 w-16 shrink-0 rounded-md object-cover ring-1 ring-slate-200" data-testid="image-thumb" />
+                      ) : (
+                        <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[11px] uppercase text-slate-500 ring-1 ring-slate-200">{f.kind}</span>
+                      )}
                       <span className="truncate font-medium text-slate-800">{f.name}</span>
                       <span className="shrink-0 text-xs text-slate-500">
-                        {f.chars.toLocaleString()} chars{f.pages ? ` · ${f.pages} pages` : ""}
+                        {f.kind === "image" ? `${f.width}×${f.height}px` : `${f.chars.toLocaleString()} chars`}
+                        {f.pages ? ` · ${f.pages} pages` : ""}
                       </span>
                       <button className={`${btn.ghost} ml-auto`} onClick={() => setPreviewOpen(previewOpen === f.name ? null : f.name)}>
                         {previewOpen === f.name ? "Hide" : "Preview"}
@@ -360,7 +395,10 @@ export function CreateFlow({
                         Remove
                       </button>
                     </div>
-                    {previewOpen === f.name ? (
+                    {previewOpen === f.name && f.kind === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={imgSrc(f)} alt={f.name} className="max-h-96 w-full border-t border-slate-200 bg-white object-contain p-2" />
+                    ) : previewOpen === f.name ? (
                       <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-slate-200 px-3 py-2 text-xs text-slate-600" data-testid="file-preview">
                         {f.text.slice(0, 4000)}
                         {f.text.length > 4000 ? `\n\n… ${(f.text.length - 4000).toLocaleString()} more characters (all of it will be used)` : ""}
@@ -370,7 +408,14 @@ export function CreateFlow({
                 ))}
               </ul>
             ) : null}
+            {engine === "demo" && imageCount > 0 ? (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200" data-testid="image-demo-notice">
+                <strong>{IMAGES_NEED_KEY_MESSAGE}.</strong> {imageCount} image{imageCount === 1 ? " is" : "s are"} attached but will be skipped in Demo mode
+                {totalChars >= 20 ? "; cards will come from your text notes." : "."}
+              </p>
+            ) : null}
             <p className="mt-3 text-xs text-slate-500">
+              {imageCount ? `${imageCount} image${imageCount === 1 ? "" : "s"} · ` : ""}
               {notes.length} source{notes.length === 1 ? "" : "s"} · {totalChars.toLocaleString()} characters · ~{Math.ceil(totalChars / 4).toLocaleString()} tokens
               {totalChars / 4 > 30000 ? " · long notes will be split into sections and processed in parts" : ""}
             </p>

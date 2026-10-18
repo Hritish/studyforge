@@ -61,6 +61,22 @@ async function main() {
   ok(docx.text.includes("Gamma: rate of change of delta"), "docx text extracted via mammoth");
   ok(pdf.text.includes("Spot rate") && typeof pdf.pdfBase64 === "string", "pdf text extracted + base64 kept for native PDF input");
 
+  // 3b. Image upload (slide screenshot): downscaled + re-encoded for vision
+  const imgFd = new FormData();
+  imgFd.append("files", new Blob([readFileSync("tests/fixtures/cfa-slide.png")]), "cfa-slide.png");
+  const imgEx = await json("/api/extract", { method: "POST", body: imgFd });
+  const slide = imgEx.body.files?.[0];
+  ok(imgEx.status === 200 && slide?.kind === "image" && slide.mediaType === "image/jpeg" && slide.width === 1568, "image upload downscaled to 1568px JPEG");
+  const imgCtx = await json("/api/context", post({ notesText: md.text, images: [slide] }));
+  ok(imgCtx.status === 200 && imgCtx.body.context.name === "CFA Level II", "context detection accepts images");
+  if (demo) ok(String(imgCtx.body.warning).includes("requires an Anthropic API key"), "demo mode: images-need-key notice on context");
+  if (demo) {
+    const onlyImg = await generate({ context: imgCtx.body.context, notes: [slide], count: "auto" });
+    ok(onlyImg.events.some((e) => e.type === "error" && e.message.includes("ANTHROPIC_API_KEY")), "demo mode: image-only generation explains the API-key requirement");
+    const mixed = await generate({ context: imgCtx.body.context, notes: [slide, { name: "n", kind: "paste", text: "Alpha: first letter\nBeta: second letter" }], count: "auto" });
+    ok(mixed.done?.cards.length === 2 && mixed.events.some((e) => e.type === "warning" && e.message.includes("ANTHROPIC_API_KEY")), "demo mode: text + images still generates from text, with notice");
+  }
+
   // 4. Context detection from notes only
   const ctx = await json("/api/context", post({ notesText: md.text }));
   ok(ctx.status === 200 && ctx.body.context.name === "CFA Level II", `context inferred from notes: "${ctx.body.context.name}" (${ctx.body.context.source})`);
