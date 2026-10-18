@@ -49,3 +49,6 @@ next-env.d.ts
 *.db
 *.db-journal
 /.playwright-browsers
+
+# local file store for uploads (dev)
+/.uploads/

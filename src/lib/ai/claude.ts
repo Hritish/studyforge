@@ -82,7 +82,10 @@ export interface ClaudeLike {
   beta: {
     messages: {
       create(params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming): Promise<MessageLike>;
-      stream(params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming): {
+      stream(
+        params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
+        options?: { signal?: AbortSignal },
+      ): {
         on(event: "text", cb: (delta: string) => void): unknown;
         finalMessage(): Promise<MessageLike>;
       };
@@ -95,8 +98,9 @@ export async function generateCardsWithClaude(
   client: ClaudeLike,
   input: CardsPromptInput,
   onDelta?: (charsSoFar: number) => void,
+  signal?: AbortSignal,
 ): Promise<ParseResult<CardDraft[]>> {
-  const stream = client.beta.messages.stream(buildCardsRequest(input));
+  const stream = client.beta.messages.stream(buildCardsRequest(input), signal ? { signal } : undefined);
   let chars = 0;
   stream.on("text", (delta) => {
     chars += delta.length;

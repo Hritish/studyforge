@@ -3,17 +3,35 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import type { CardCount, CardDraft, GenerationEvent, NoteInput, StudyContext } from "@/lib/types";
+import {
+  ACCEPT_ATTR,
+  contentTypeFor,
+  jsonBody,
+  kindFromName,
+  MAX_UPLOAD_BYTES,
+  newUploadKey,
+  UNSUPPORTED_FILE_MESSAGE,
+  type FileRef,
+  type NoteRef,
+  type UploadConfig,
+} from "@/lib/files/common";
+import type { CardCount, CardDraft, GenerationEvent, StudyContext } from "@/lib/types";
 import { EMPTY_CONTEXT, IMAGES_NEED_KEY_MESSAGE } from "@/lib/types";
 import { btn, Card, input, ProgressBar, Spinner } from "../ui";
 import { ContextEditor } from "./ContextEditor";
 import { ReviewList, type DraftWithId } from "./ReviewList";
 
 type Step = "input" | "context" | "generating" | "review";
-type UploadedNote = NoteInput & { chars: number; pages?: number; width?: number; height?: number };
+/** An uploaded file: a reference to the stored bytes plus extracted text, and a local preview URL for images. */
+type UploadedNote = FileRef & { previewUrl?: string };
 
-const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp,.gif";
-const imgSrc = (n: { imageBase64?: string; mediaType?: string }) => `data:${n.mediaType ?? "image/jpeg"};base64,${n.imageBase64}`;
+const ACCEPT = ACCEPT_ATTR;
+const imgSrc = (n: { previewUrl?: string }) => n.previewUrl ?? "";
+const toRef = ({ name, kind, text, fileId, mediaType }: UploadedNote): NoteRef => ({ name, kind, text, fileId, mediaType });
+const postJson = (url: string, value: unknown): Promise<Response> =>
+  fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: jsonBody(value) });
+/** Uploads running at once. */
+const UPLOAD_CONCURRENCY = 3;
 
 const NOTES_PLACEHOLDER = `Paste your notes here. For example (CFA Level II):
 
@@ -27,11 +45,14 @@ OAS = Z-spread − option cost`;
 
 export function CreateFlow({
   engine,
+  upload: uploadCfg,
   setId,
   setTitle,
   initialContext,
 }: {
   engine: "demo" | "claude";
+  /** Where uploads go: Vercel Blob (hosted) or the local file store (dev). */
+  upload: UploadConfig;
   /** When set, we're adding notes to an existing set. */
   setId?: string;
   setTitle?: string;
@@ -52,6 +73,7 @@ export function CreateFlow({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  /** `chunk` = parts finished so far (parts run a few at a time). */
   const [progress, setProgress] = useState<{ chunk: number; chunks: number; message: string }>({ chunk: 0, chunks: 1, message: "" });
   const [liveCount, setLiveCount] = useState(0);
   const [drafts, setDrafts] = useState<DraftWithId[]>([]);
@@ -59,30 +81,72 @@ export function CreateFlow({
   const fileRef = useRef<HTMLInputElement>(null);
   const syllabusRef = useRef<HTMLInputElement>(null);
 
-  const notes: NoteInput[] = [
-    ...(pasteText.trim() ? [{ name: "Pasted notes", kind: "paste" as const, text: pasteText }] : []),
-    ...files.map(({ name, kind, text, pdfBase64, imageBase64, mediaType }) => ({ name, kind, text, pdfBase64, imageBase64, mediaType })),
-  ];
+  // Only small references go to the server; it fetches PDF/image bytes from the file store itself.
+  const notes: NoteRef[] = [...(pasteText.trim() ? [{ name: "Pasted notes", kind: "paste" as const, text: pasteText }] : []), ...files.map(toRef)];
+  const storedKeys = [...files, ...(syllabus ? [syllabus] : [])].flatMap((f) => (f.fileId ? [f.fileId] : []));
   const totalChars = notes.reduce((a, n) => a + n.text.length, 0);
   const imageCount = notes.filter((n) => n.kind === "image").length + (syllabus?.kind === "image" ? 1 : 0);
 
+  /** Store one file (Vercel Blob client upload, or the local store) and get its extracted text back. */
+  async function uploadOne(f: File): Promise<{ file?: FileRef; errors: string[] }> {
+    if (!kindFromName(f.name)) return { errors: [`${f.name}: ${UNSUPPORTED_FILE_MESSAGE}`] };
+    if (f.size > MAX_UPLOAD_BYTES) return { errors: [`${f.name}: larger than 25 MB.`] };
+    if (uploadCfg.mode === "blob") {
+      // Bytes go browser → Vercel Blob directly; the function only sees the reference.
+      const { upload: blobUpload } = await import("@vercel/blob/client");
+      const blob = await blobUpload(newUploadKey(f.name), f, {
+        access: uploadCfg.access,
+        handleUploadUrl: "/api/upload",
+        contentType: contentTypeFor(f.name) ?? undefined,
+        multipart: f.size > 8 * 1024 * 1024,
+      });
+      const res = await postJson("/api/files/ingest", { key: blob.pathname, name: f.name });
+      const data = await res.json();
+      if (!res.ok) return { errors: [data.error ?? `${f.name}: upload failed.`] };
+      return { file: data.file, errors: data.errors ?? [] };
+    }
+    const fd = new FormData();
+    fd.append("files", f);
+    const res = await fetch("/api/files", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) return { errors: [data.error ?? `${f.name}: upload failed.`] };
+    return { file: data.files?.[0], errors: data.errors ?? [] };
+  }
+
   async function upload(list: FileList | File[] | null): Promise<UploadedNote[]> {
     if (!list || list.length === 0) return [];
-    const fd = new FormData();
-    for (const f of Array.from(list)) fd.append("files", f);
-    setBusy("Reading files…");
+    const all = Array.from(list);
+    const results: ({ file?: FileRef; errors: string[] } | undefined)[] = new Array(all.length);
+    let next = 0;
+    let finished = 0;
+    setBusy(all.length > 1 ? `Uploading files (0 of ${all.length})…` : "Reading file…");
     setError(null);
     try {
-      const res = await fetch("/api/extract", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Upload failed.");
-      if (data.errors?.length) setError(data.errors.join(" "));
-      return data.files as UploadedNote[];
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed.");
-      return [];
+      await Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, all.length) }, async () => {
+          while (next < all.length) {
+            const i = next++;
+            results[i] = await uploadOne(all[i]).catch((e) => ({ errors: [`${all[i].name}: ${e instanceof Error ? e.message : "upload failed."}`] }));
+            finished++;
+            if (all.length > 1) setBusy(`Uploading files (${finished} of ${all.length})…`);
+          }
+        }),
+      );
+      const errors = results.flatMap((r) => r?.errors ?? []);
+      if (errors.length) setError(errors.join(" "));
+      return results.flatMap((r, i) =>
+        r?.file ? [{ ...r.file, previewUrl: r.file.kind === "image" ? URL.createObjectURL(all[i]) : undefined }] : [],
+      );
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** Best-effort delete of stored uploads the user removed. */
+  function discard(f: UploadedNote) {
+    if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+    if (f.fileId) {
+      void fetch("/api/files", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: [f.fileId] }) }).catch(() => undefined);
     }
   }
 
@@ -106,7 +170,7 @@ export function CreateFlow({
   async function continueFromInput() {
     setError(null);
     // Images and PDFs (including scanned ones) are read visually by Claude, so they count without text.
-    const hasVisual = notes.some((n) => n.kind === "image" || (n.kind === "pdf" && Boolean(n.pdfBase64)));
+    const hasVisual = notes.some((n) => n.kind === "image" || (n.kind === "pdf" && Boolean(n.fileId)));
     if (notes.length === 0 || (totalChars < 20 && !hasVisual)) {
       setError("Add some notes first — paste text or upload a file.");
       return;
@@ -117,16 +181,12 @@ export function CreateFlow({
     }
     setBusy(engine === "claude" ? "Claude is working out what you're studying…" : "Detecting your study context…");
     try {
-      const res = await fetch("/api/context", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          examName: examName || undefined,
-          syllabus: syllabus ? { name: syllabus.name, kind: syllabus.kind, text: syllabus.text, pdfBase64: syllabus.pdfBase64 } : undefined,
-          notesText: notes.map((n) => n.text).join("\n\n"),
-          notesPdf: notes.find((n) => n.kind === "pdf" && n.pdfBase64)?.pdfBase64,
-          images: notes.filter((n) => n.kind === "image").slice(0, 6),
-        }),
+      const res = await postJson("/api/context", {
+        examName: examName || undefined,
+        syllabus: syllabus ? toRef(syllabus) : undefined,
+        notesText: notes.map((n) => n.text).join("\n\n"),
+        notesPdf: notes.find((n) => n.kind === "pdf" && n.fileId)?.fileId,
+        images: notes.filter((n) => n.kind === "image").slice(0, 6),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Context detection failed.");
@@ -147,11 +207,7 @@ export function CreateFlow({
     setLiveCount(0);
     setProgress({ chunk: 0, chunks: 1, message: "Starting…" });
     try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context: ctx, notes, count, setId }),
-      });
+      const res = await postJson("/api/generate", { context: ctx, notes, count, setId });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "Generation failed.");
@@ -172,7 +228,7 @@ export function CreateFlow({
           if (!line) continue;
           const ev = JSON.parse(line) as GenerationEvent;
           if (ev.type === "start") setProgress({ chunk: 0, chunks: ev.chunks, message: ev.mode === "demo" ? "Extracting cards (Demo mode)…" : `Generating with ${ev.model}…` });
-          if (ev.type === "progress") setProgress({ chunk: ev.chunk, chunks: ev.chunks, message: ev.message });
+          if (ev.type === "progress") setProgress({ chunk: ev.done, chunks: ev.chunks, message: ev.message });
           if (ev.type === "cards") setLiveCount((n) => n + ev.cards.length);
           if (ev.type === "warning") setWarnings((w) => [...w, ev.message]);
           if (ev.type === "error") failed = ev.message;
@@ -202,13 +258,10 @@ export function CreateFlow({
     setError(null);
     const savedNotes = notes.map(({ name, kind, text }) => ({ name, kind, text }));
     try {
+      // `files`: stored uploads the server deletes once the cards are saved.
       const res = adding
-        ? await fetch(`/api/sets/${setId}/cards`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cards, notes: savedNotes }) })
-        : await fetch("/api/sets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: title || undefined, context, contextConfirmed: true, cards, notes: savedNotes }),
-          });
+        ? await postJson(`/api/sets/${setId}/cards`, { cards, notes: savedNotes, files: storedKeys })
+        : await postJson("/api/sets", { title: title || undefined, context, contextConfirmed: true, cards, notes: savedNotes, files: storedKeys });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Save failed.");
       router.push(`/sets/${adding ? setId : data.id}`);
@@ -290,7 +343,13 @@ export function CreateFlow({
                         {syllabus.name}
                         {syllabus.kind === "image" ? "" : ` · ${syllabus.chars.toLocaleString()} chars`}
                       </span>
-                      <button className={btn.ghost} onClick={() => setSyllabus(null)}>
+                      <button
+                        className={btn.ghost}
+                        onClick={() => {
+                          discard(syllabus);
+                          setSyllabus(null);
+                        }}
+                      >
                         Remove
                       </button>
                     </div>
@@ -306,7 +365,10 @@ export function CreateFlow({
                     accept={ACCEPT}
                     onChange={async (e) => {
                       const [f] = await upload(e.target.files);
-                      if (f) setSyllabus(f);
+                      if (f) {
+                        if (syllabus) discard(syllabus);
+                        setSyllabus(f);
+                      }
                       e.target.value = "";
                     }}
                   />
@@ -393,7 +455,13 @@ export function CreateFlow({
                       <button className={`${btn.ghost} ml-auto`} onClick={() => setPreviewOpen(previewOpen === f.name ? null : f.name)}>
                         {previewOpen === f.name ? "Hide" : "Preview"}
                       </button>
-                      <button className={btn.danger} onClick={() => setFiles(files.filter((_, k) => k !== i))}>
+                      <button
+                        className={btn.danger}
+                        onClick={() => {
+                          discard(f);
+                          setFiles(files.filter((_, k) => k !== i));
+                        }}
+                      >
                         Remove
                       </button>
                     </div>
@@ -487,11 +555,11 @@ export function CreateFlow({
             <Spinner className="h-5 w-5 text-indigo-600" />
             <h2 className="text-lg font-semibold text-slate-900">Generating flashcards{context.name ? ` for ${context.name}` : ""}…</h2>
           </div>
-          <ProgressBar className="mt-5" value={progress.chunks ? (Math.max(0, progress.chunk - 0.5) / progress.chunks) * 100 : 5} />
+          <ProgressBar className="mt-5" value={progress.chunks ? Math.max(5, (progress.chunk / progress.chunks) * 100) : 5} />
           <div className="mt-2 flex justify-between text-sm text-slate-500" data-testid="gen-progress">
             <span>{progress.message}</span>
             <span>
-              Part {Math.max(1, progress.chunk)} of {progress.chunks} · {liveCount} cards
+              {progress.chunk} of {progress.chunks} part{progress.chunks === 1 ? "" : "s"} done · {liveCount} cards
             </span>
           </div>
           {warnings.length ? (

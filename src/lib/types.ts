@@ -74,10 +74,12 @@ export type CardCount = "auto" | 10 | 25 | 50;
 
 export type GenerationEvent =
   | { type: "start"; mode: "demo" | "claude"; chunks: number; model?: string }
-  | { type: "progress"; chunk: number; chunks: number; message: string }
+  /** `chunk` is the 1-based position of the part this message is about; `done` counts finished parts. */
+  | { type: "progress"; chunk: number; chunks: number; done: number; message: string }
   | { type: "cards"; chunk: number; cards: CardDraft[] }
   | { type: "warning"; message: string }
-  | { type: "done"; cards: CardDraft[]; removedDuplicates: number }
+  /** `skipped` lists parts that were not generated because the time budget ran out. */
+  | { type: "done"; cards: CardDraft[]; removedDuplicates: number; skipped?: string[] }
   | { type: "error"; message: string };
 
 /** A saved card as sent to client components. */

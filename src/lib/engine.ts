@@ -37,7 +37,7 @@ export function claudeGenerator(client: ClaudeLike = createClient() as unknown a
     model: getModel(),
     supportsPdf: true,
     supportsImages: true,
-    async generate({ item, index, count, target, context, existingFronts, onDelta }) {
+    async generate({ item, index, count, target, context, existingFronts, onDelta, signal }) {
       try {
         return await generateCardsWithClaude(
           client,
@@ -54,6 +54,7 @@ export function claudeGenerator(client: ClaudeLike = createClient() as unknown a
             existingFronts,
           },
           onDelta,
+          signal,
         );
       } catch (err) {
         return { ok: false, reason: "invalid", message: friendlyError(err) };
@@ -68,9 +69,11 @@ export function getGenerator(): ChunkGenerator {
 
 export async function detectContext(
   input: ContextPromptInput,
+  /** Images attached by the user (in demo mode their bytes aren't loaded, so `input.images` is empty). */
+  attachedImages = input.images?.length ?? 0,
 ): Promise<{ context: StudyContext; mode: EngineMode; warning?: string }> {
   if (engineMode() === "demo") {
-    const warning = input.images?.length ? `${IMAGES_NEED_KEY_MESSAGE}. Images were not used to detect the context.` : undefined;
+    const warning = attachedImages ? `${IMAGES_NEED_KEY_MESSAGE}. Images were not used to detect the context.` : undefined;
     return { context: detectDemoContext(input), mode: "demo", warning };
   }
   try {

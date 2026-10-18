@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { AddCardsZ } from "@/lib/api-schemas";
 import { dedupeCards } from "@/lib/chunk";
 import { prisma } from "@/lib/db";
+import { getFileStore } from "@/lib/files/store";
 import { badRequest, parseBody } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -20,6 +21,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ...body.data.notes.map((n) => prisma.noteSource.create({ data: { setId: id, name: n.name, kind: n.kind, text: n.text } })),
     prisma.studySet.update({ where: { id }, data: { updatedAt: new Date() } }),
   ]);
+  if (body.data.files.length) after(() => getFileStore().del(body.data.files));
   return NextResponse.json({ added: cards.length, skippedDuplicates: removed }, { status: 201 });
 }
 

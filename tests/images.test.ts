@@ -133,7 +133,8 @@ describe("generation with images", () => {
         generateCardsWithClaude(client, { context, notesText: item.text, images: item.images, notesLabel: item.label, chunkIndex: index, chunkCount: count, target, existingFronts }),
     };
     const events: GenerationEvent[] = [];
-    const out = await runGeneration({ notes: Array.from({ length: 10 }, (_, i) => imgNote(i)), context: ctx, target: null, existing: [] }, gen, (e) => events.push(e));
+    // Sequential, so the second request can be told about the first batch's cards.
+    const out = await runGeneration({ notes: Array.from({ length: 10 }, (_, i) => imgNote(i)), context: ctx, target: null, existing: [], concurrency: 1 }, gen, (e) => events.push(e));
     expect(requests).toHaveLength(2);
     const firstContent = (requests[0] as { messages: { content: { type: string }[] }[] }).messages[0].content;
     expect(firstContent.filter((b) => b.type === "image")).toHaveLength(8);

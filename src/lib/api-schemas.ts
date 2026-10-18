@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { isValidFileKey } from "./files/common";
 import { CARD_TYPES } from "./types";
+
+const FileKeyZ = z.string().refine(isValidFileKey, "is not a valid file reference");
 
 export const ContextZ = z.object({
   name: z.string().max(200).default(""),
@@ -11,17 +14,24 @@ export const ContextZ = z.object({
   confidence: z.number().min(0).max(1).optional(),
 });
 
+/**
+ * A note as sent by the browser. File bytes are never inlined: PDFs and images
+ * are referenced by `fileId` (a file-store key) and fetched by the server.
+ * Unknown keys (e.g. a legacy `pdfBase64`) are stripped.
+ */
 export const NoteZ = z.object({
   name: z.string().max(300),
   kind: z.enum(["paste", "txt", "md", "pdf", "docx", "image"]),
-  text: z.string(),
-  pdfBase64: z.string().optional(),
-  imageBase64: z.string().optional(),
+  text: z.string().max(3_000_000),
+  fileId: FileKeyZ.optional(),
   mediaType: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]).optional(),
 });
 
-/** Notes as stored in the DB (no binary payloads). */
-const SavedNoteZ = NoteZ.omit({ pdfBase64: true, imageBase64: true, mediaType: true });
+/** Notes as stored in the DB (text only). */
+const SavedNoteZ = NoteZ.omit({ fileId: true, mediaType: true });
+
+/** Store keys to delete once the set is saved. */
+const FilesToDeleteZ = z.array(FileKeyZ).max(200).default([]);
 
 export const CardDraftZ = z.object({
   front: z.string().trim().min(1).max(1000),
@@ -43,8 +53,8 @@ export const DetectContextZ = z.object({
   examName: z.string().max(200).optional(),
   syllabus: NoteZ.optional(),
   notesText: z.string().optional(),
-  /** Base64 of the first notes PDF; its first pages are read for context. */
-  notesPdf: z.string().optional(),
+  /** File reference of the first notes PDF; its first pages are read for context. */
+  notesPdf: FileKeyZ.optional(),
   /** Slide images from notes (a sample is used). */
   images: z.array(NoteZ).max(20).optional(),
 });
@@ -55,12 +65,17 @@ export const CreateSetZ = z.object({
   contextConfirmed: z.boolean().default(true),
   cards: z.array(CardDraftZ).max(1000),
   notes: z.array(SavedNoteZ).max(100).default([]),
+  files: FilesToDeleteZ,
 });
 
 export const AddCardsZ = z.object({
   cards: z.array(CardDraftZ).max(1000),
   notes: z.array(SavedNoteZ).max(100).default([]),
+  files: FilesToDeleteZ,
 });
+
+export const IngestZ = z.object({ key: FileKeyZ, name: z.string().min(1).max(300) });
+export const DeleteFilesZ = z.object({ keys: z.array(FileKeyZ).max(200) });
 
 export const PatchSetZ = z.object({
   title: z.string().trim().min(1).max(200).optional(),
