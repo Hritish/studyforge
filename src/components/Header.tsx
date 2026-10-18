@@ -1,10 +1,14 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { getModel } from "@/lib/ai/claude";
+import { getAuthConfig, SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 import { engineMode } from "@/lib/engine";
 import { Logo } from "./Logo";
 
-export function Header() {
+export async function Header() {
   const mode = engineMode();
+  const auth = getAuthConfig();
+  const signedIn = auth ? verifySession((await cookies()).get(SESSION_COOKIE)?.value, auth.key) : false;
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
@@ -28,6 +32,13 @@ export function Header() {
           <Link href="/new" className="rounded-lg bg-indigo-600 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-indigo-500">
             + New set
           </Link>
+          {signedIn ? (
+            <form method="post" action="/api/logout">
+              <button type="submit" className="rounded-lg px-3 py-1.5 text-slate-600 hover:bg-slate-100 hover:text-slate-900" data-testid="logout">
+                Log out
+              </button>
+            </form>
+          ) : null}
         </nav>
       </div>
     </header>
