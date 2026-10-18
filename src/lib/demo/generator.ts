@@ -156,7 +156,7 @@ export function generateDemoCards(text: string, ctx: StudyContext, opts: DemoOpt
   const cards: CardDraft[] = pairs.map((p) => {
     const type = classifyCard(p.front, p.back);
     return {
-      front: type === "formula" && !/formula/i.test(p.front) ? `Formula: ${p.front}` : p.front,
+      front: p.front,
       back: p.back,
       type,
       topic: pickTopic(p.heading, p.front, p.back, ctx),
