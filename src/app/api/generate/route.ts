@@ -6,7 +6,7 @@ import { resolveNotes } from "@/lib/files/ingest";
 import { getFileStore } from "@/lib/files/store";
 import { runGeneration } from "@/lib/generate";
 import { parseBody } from "@/lib/http";
-import { generationDeadline } from "@/lib/time-budget";
+import { generationBudget } from "@/lib/time-budget";
 import type { GenerationEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
         // Fetch the stored PDFs/images the generator can actually read.
         const resolved = await resolveNotes(getFileStore(), notes, { pdf: gen.supportsPdf, images: gen.supportsImages });
         await runGeneration(
-          { notes: resolved, context, target: count === "auto" ? null : count, existing, deadline: generationDeadline(startedAt, maxDuration) },
+          { notes: resolved, context, target: count === "auto" ? null : count, existing, ...generationBudget(startedAt, maxDuration) },
           gen,
           emit,
         );

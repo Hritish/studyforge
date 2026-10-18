@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runGeneration, type ChunkGenerator } from "@/lib/generate";
-import { generationDeadline } from "@/lib/time-budget";
+import { generationBudget } from "@/lib/time-budget";
 import { EMPTY_CONTEXT, type CardDraft, type GenerationEvent, type NoteInput } from "@/lib/types";
 
 const card = (front: string): CardDraft => ({ front, back: `${front} means something`, type: "definition", topic: "T", difficulty: 1, source: "" });
@@ -134,9 +134,9 @@ describe("concurrent runner", () => {
 });
 
 describe("generation time budget", () => {
-  it("applies only on Vercel (or when overridden)", () => {
-    expect(generationDeadline(1000, 300, {})).toBeUndefined();
-    expect(generationDeadline(1000, 300, { VERCEL: "1" })).toBe(1000 + 280_000);
-    expect(generationDeadline(1000, 300, { GENERATION_TIME_BUDGET_SECONDS: "60" })).toBe(61_000);
+  it("applies only on Vercel (or when overridden), with a proportional reserve", () => {
+    expect(generationBudget(1000, 300, {})).toBeUndefined();
+    expect(generationBudget(1000, 300, { VERCEL: "1" })).toEqual({ deadline: 1000 + 280_000, reserveMs: 98_000 });
+    expect(generationBudget(1000, 300, { GENERATION_TIME_BUDGET_SECONDS: "60" })).toEqual({ deadline: 61_000, reserveMs: 21_000 });
   });
 });

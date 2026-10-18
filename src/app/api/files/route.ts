@@ -15,6 +15,10 @@ export async function POST(req: Request) {
   const denied = unauthorized(req);
   if (denied) return denied;
   if (storageMode() !== "local") return badRequest("Files are uploaded directly to Vercel Blob in this deployment.", 404);
+  if (process.env.VERCEL) {
+    // Vercel's filesystem is read-only (and requests are capped at 4.5 MB): uploads need Blob.
+    return badRequest("File uploads need a Vercel Blob store: add one under Storage so BLOB_READ_WRITE_TOKEN is set, then redeploy. See docs/DEPLOY.md.", 503);
+  }
   let form: FormData;
   try {
     form = await req.formData();
