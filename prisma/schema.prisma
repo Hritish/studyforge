@@ -1,0 +1,62 @@
+// StudyForge data model (SQLite, single user, no auth)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model StudySet {
+  id               String       @id @default(cuid())
+  title            String
+  // Denormalized for the library badge, e.g. "CFA Level II"
+  contextName      String       @default("")
+  // Full StudyContext as JSON (see src/lib/types.ts)
+  contextJson      String       @default("{}")
+  contextConfirmed Boolean      @default(false)
+  bestMatchMs      Int?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  cards            Card[]
+  notes            NoteSource[]
+}
+
+model NoteSource {
+  id        String   @id @default(cuid())
+  setId     String
+  set       StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  name      String
+  kind      String // paste | txt | md | pdf | docx
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([setId])
+}
+
+model Card {
+  id             String    @id @default(cuid())
+  setId          String
+  set            StudySet  @relation(fields: [setId], references: [id], onDelete: Cascade)
+  front          String
+  back           String
+  // definition | concept | formula | calculation | compare
+  type           String    @default("definition")
+  topic          String    @default("General")
+  difficulty     Int       @default(2)
+  source         String    @default("")
+  position       Int       @default(0)
+  // 0..5; a card counts as mastered at >= 3
+  mastery        Int       @default(0)
+  // new | learning | known  (flashcard self-marking)
+  status         String    @default("new")
+  correctCount   Int       @default(0)
+  incorrectCount Int       @default(0)
+  lastStudiedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([setId])
+}
